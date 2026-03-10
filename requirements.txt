@@ -3,4 +3,5 @@ pandas
 numpy<2.0.0
 scikit-learn
 tensorflow
+openpyxl
 
