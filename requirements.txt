@@ -1,5 +1,6 @@
-scikit-learn
-pandas
-numpy
-tensorflow
 streamlit
+pandas
+numpy<2.0.0
+scikit-learn
+tensorflow
+
