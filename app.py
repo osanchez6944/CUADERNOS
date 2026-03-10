@@ -1,68 +1,81 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.decomposition import PCA
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import load_model
 
-# 1. Cargar datos y limpiar
-url = "https://github.com/adiacla/bigdata/raw/master/riesgo.xlsx"
-df = pd.read_excel(url)
-df = df.drop(columns=["Customer_ID","Name","SSN"])
+# Configuración de la página
+st.set_page_config(page_title="Riesgo Crediticio", layout="wide")
+st.title("🏦 Predicción de Riesgo Crediticio (ANN Multiclase)")
 
-# Rellenar valores nulos para evitar errores en Streamlit
-for col in df.columns:
-    if df[col].dtype == 'object':
-        df[col] = df[col].fillna(df[col].mode()[0])
-    else:
-        df[col] = df[col].fillna(df[col].mean())
+# 1. Cargar todos los artefactos exportados
+@st.cache_resource
+def cargar_modelos():
+    modelo = load_model('modelo.keras')
+    scaler = joblib.load('scaler.pkl')
+    pca = joblib.load('pca.pkl')
+    encoders = joblib.load('encoders.pkl')
+    columnas = joblib.load('columnas.pkl')
+    return modelo, scaler, pca, encoders, columnas
 
-# 2. Guardar las columnas originales (sin el target)
-X_cols = df.drop("Credit_Score", axis=1).columns
-joblib.dump(list(X_cols), 'columnas.pkl')
+try:
+    modelo, scaler, pca, encoders, columnas = cargar_modelos()
+    st.success("✅ Modelo y transformadores cargados correctamente.")
+except Exception as e:
+    st.error(f"❌ Error cargando los archivos. Verifica que subiste los .pkl y .keras a GitHub. Detalle: {e}")
+    st.stop()
 
-# 3. Codificar variables categóricas CORRECTAMENTE (Un encoder por columna)
-cat_cols = df.select_dtypes(include=["object"]).columns
-encoders = {} # Diccionario para guardar todos los encoders
+st.divider()
+st.subheader("📋 Ingresa los datos del cliente:")
 
-for col in cat_cols:
-    le = LabelEncoder()
-    df[col] = le.fit_transform(df[col].astype(str))
-    encoders[col] = le
+# 2. Crear el formulario dinámico basado en las columnas originales
+input_data = {}
+cols_visuales = st.columns(3) # Dividir la pantalla en 3 columnas
 
-joblib.dump(encoders, 'encoders.pkl')
+for i, col in enumerate(columnas):
+    with cols_visuales[i % 3]:
+        # Si es categórica, mostramos un selectbox con las clases reales
+        if col in encoders:
+            clases_reales = encoders[col].classes_
+            input_data[col] = st.selectbox(f"{col}", clases_reales)
+        # Si es numérica, mostramos un number_input
+        else:
+            input_data[col] = st.number_input(f"{col}", value=0.0)
 
-# 4. Separar variables
-X = df.drop("Credit_Score", axis=1)
-y = df["Credit_Score"]
-y = to_categorical(y)
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# 5. Normalizar
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-joblib.dump(scaler, 'scaler.pkl')
-
-# 6. PCA
-pca = PCA(n_components=10)
-X_train = pca.fit_transform(X_train)
-X_test = pca.transform(X_test)
-joblib.dump(pca, 'pca.pkl')
-
-# 7. Red Neuronal
-model = Sequential()
-model.add(Dense(64, activation='relu', input_shape=(X_train.shape[1],)))
-model.add(Dense(32, activation='relu'))
-model.add(Dense(3, activation='softmax'))
-
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-model.fit(X_train, y_train, epochs=50, batch_size=32, validation_split=0.2, verbose=0) # verbose=0 para no llenar la pantalla
-
-# 8. Guardar modelo
-model.save('modelo.keras')
-print("¡Entrenamiento finalizado y archivos exportados! Descarga los .pkl y el .keras")
+# 3. Botón para predecir
+st.divider()
+if st.button("🚀 Evaluar Riesgo de Crédito", use_container_width=True):
+    # Convertir a DataFrame
+    df_input = pd.DataFrame([input_data])
+    
+    # Aplicar el preprocesamiento exactamente igual que en Colab
+    try:
+        # A. Codificar categóricas
+        for col in encoders.keys():
+            df_input[col] = encoders[col].transform(df_input[col].astype(str))
+            
+        # B. Escalar
+        df_scaled = scaler.transform(df_input)
+        
+        # C. PCA
+        df_pca = pca.transform(df_scaled)
+        
+        # D. Predecir
+        prediccion = modelo.predict(df_pca)
+        clase_ganadora = np.argmax(prediccion, axis=1)[0]
+        probabilidades = prediccion[0] * 100
+        
+        # Mostrar resultados
+        st.subheader("📊 Resultado de la Evaluación")
+        
+        if clase_ganadora == 0:
+            st.success(f"Categoría asignada: {clase_ganadora} (Bajo Riesgo)")
+        elif clase_ganadora == 1:
+            st.warning(f"Categoría asignada: {clase_ganadora} (Riesgo Medio)")
+        else:
+            st.error(f"Categoría asignada: {clase_ganadora} (Alto Riesgo)")
+            
+        st.write(f"**Probabilidades de la red neuronal:** Clase 0 ({probabilidades[0]:.1f}%) | Clase 1 ({probabilidades[1]:.1f}%) | Clase 2 ({probabilidades[2]:.1f}%)")
+        
+    except Exception as e:
+        st.error(f"Error procesando los datos: {e}")
